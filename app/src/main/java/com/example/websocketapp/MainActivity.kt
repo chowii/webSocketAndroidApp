@@ -5,59 +5,96 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
+import android.view.SurfaceView
 import android.widget.VideoView
 import androidx.appcompat.app.AppCompatActivity
+import com.example.websocketapp.camera2.Camera2BasicFragment
 import com.google.gson.Gson
-import okhttp3.*
-import okio.ByteString
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.disposables.CompositeDisposable
+import io.reactivex.schedulers.Schedulers
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.WebSocket
 import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webSocket: WebSocket
 
     private lateinit var videoView: VideoView
+    private lateinit var surfaceView: SurfaceView
+    private lateinit var camera2Fragment: Camera2BasicFragment
+    private val compsiteDisposable = CompositeDisposable()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         videoView = findViewById(R.id.videoView)
-        val listener = object : WebSocketListener() {
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d("LOG_TAG---", "MainActivity#onClosed-16: ")
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d("LOG_TAG---", "MainActivity#onClosing-21: $webSocket $code $reason")
-                webSocket.close(code, reason)
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.d("LOG_TAG---", "MainActivity#onFailure-26: $webSocket $t $response")
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.d("LOG_TAG---", "MainActivity#onMessage-30: $webSocket $text")
-            }
-
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                Log.d("LOG_TAG---", "MainActivity#onMessage-34: $webSocket $bytes")
-                onMessage(webSocket, "" + bytes.hex())
-            }
-
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d("LOG_TAG---", "MainActivity#onOpen-39: $webSocket, $response")
-                webSocket.send("test")
-            }
-        }
+        surfaceView = findViewById(R.id.surfaceView)
         val request = Request.Builder().url("ws://192.168.0.6:3000").build()
-        dispatchTakeVideoIntent()
+        camera2Fragment = Camera2BasicFragment.newInstance()
+        val listener = SampleWebSocketListener(object :
+            SampleWebSocketListener.WebSocketMessageListener<ImageData> {
+            override fun onMessage(t: ImageData) {
+                camera2Fragment.showImage(t)
+            }
+
+            override fun onClosing() {
+                camera2Fragment.onSocketClosed()
+            }
+        })
         webSocket = OkHttpClient().newWebSocket(request, listener)
+        supportFragmentManager.beginTransaction()
+            .replace(R.id.container, camera2Fragment)
+            .commit()
+
+        listener.flowableSocketMessage
+//            .debounce(100, TimeUnit.MILLISECONDS)
+            .doAfterNext {
+//                Log.d("LOG_TAG---", "MainActivity#flowableSocketMessage-58: Thread-> ${Thread.currentThread().name}")
+            }
+//            .subscribeOn(Schedulers.computation())
+//            .observeOn(AndroidSchedulers.mainThread())
+            .onErrorReturn {
+                Log.e("LOG_TAG---", "MainActivity#flowableSocketMessage-63: Thread-> ${Thread.currentThread().name}", it)
+                ImageData(ByteArray(6000).toList())
+            }
+            .subscribe {
+//                Log.d("LOG_TAG---", "MainActivity#flowableSocketMessage-67: showImage ${Thread.currentThread().name}")
+                camera2Fragment.showImage(it)
+            }
+            .also {
+                compsiteDisposable.add(it)
+            }
+
+        camera2Fragment.flowableImageByte
+            .doAfterNext {
+                System.gc()
+//                Log.d("LOG_TAG---", "MainActivity#flowableImageByte-77: Thread-> ${Thread.currentThread().name}")
+            }
+//            .subscribeOn(Schedulers.io())
+//            .observeOn(AndroidSchedulers.mainThread())
+            .onErrorReturn {
+//                Log.d("LOG_TAG---", "MainActivity#flowableImageByte-81: Thread-> ${Thread.currentThread().name}")
+                ByteArray(10_000)
+            }
+            .subscribe {
+//                Log.d("LOG_TAG---", "MainActivity#flowableImageByte-86: sendSocketMessage ${Thread.currentThread().name}")
+                sendSocketMessage(it)
+            }
+            .also {
+                compsiteDisposable.add(it)
+            }
+
     }
 
     companion object {
+        @JvmField
+        var TAG: String = this::class.java.name
         const val REQUEST_VIDEO_CAPTURE = 1
     }
 
@@ -75,12 +112,12 @@ class MainActivity : AppCompatActivity() {
             videoView.setVideoURI(videoUri)
             videoUri?.let {
                 toByteStreamArray(it).asList()
-                        .also {
-                            val json = Gson().toJson(it, List::class.java)
-                            Log.d("LOG_TAG---", "MainActivity#onActivityResult-75: $json")
-                            val send = webSocket.send(json)
-                            Log.d("LOG_TAG---", "MainActivity#onActivityResult-85: $send")
-                        }
+                    .also {
+                        val json = Gson().toJson(it, List::class.java)
+                        Log.d("LOG_TAG---", "MainActivity#onActivityResult-75: $json")
+                        val send = webSocket.send(json)
+                        Log.d("LOG_TAG---", "MainActivity#onActivityResult-85: $send")
+                    }
             }
         }
         super.onActivityResult(requestCode, resultCode, intent)
@@ -112,4 +149,15 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         webSocket.close(1000, "end")
     }
+
+    fun sendSocketMessage(bytes: ByteArray) {
+        val imageData = ImageData(bytes.toList())
+        val json = Gson().toJson(imageData, ImageData::class.java)
+        val isSuccess = webSocket.send(json)
+        Log.d("LOG_TAG---", "MainActivity#sendSocketMessage-116: isSuccess=$isSuccess")
+//        Log.d("LOG_TAG---", "MainActivity#sendSocketMessage-116: " + Thread.currentThread().name)
+//        Log.d("LOG_TAG---", "MainActivity#sendSocketMessage-116: ${imageData.byteData.size} ${imageData.time} $isSuccess ${webSocket.queueSize()}")
+    }
 }
+
+data class ImageData(val byteData: List<Byte>, val time: Long = System.currentTimeMillis())
