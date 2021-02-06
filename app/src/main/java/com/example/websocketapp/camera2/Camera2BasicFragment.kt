@@ -273,8 +273,6 @@ class Camera2BasicFragment : Fragment(), View.OnClickListener,
 
     }
 
-    private val byteArrayDataSource = ByteArrayDataSource()
-
     private var isSocketOpen = true
 
     override fun onCreateView(
@@ -863,7 +861,6 @@ class Camera2BasicFragment : Fragment(), View.OnClickListener,
 
     fun showImage(imageData: ImageData) {
         val byteArray = imageData.byteData.toByteArray()
-        byteArrayDataSource.setByteData(byteArray)
         val bitmap = BitmapFactory.decodeByteArray(byteArray,0, byteArray.size)
         gpuImage.setImage(bitmap)
     }
