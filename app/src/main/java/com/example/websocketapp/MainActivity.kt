@@ -1,6 +1,8 @@
 package com.example.websocketapp
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
@@ -19,7 +21,6 @@ import okhttp3.WebSocket
 import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
@@ -42,7 +43,6 @@ class MainActivity : AppCompatActivity() {
             override fun onMessage(t: ImageData) {
                 camera2Fragment.showImage(t)
             }
-
             override fun onClosing() {
                 camera2Fragment.onSocketClosed()
             }
@@ -51,11 +51,10 @@ class MainActivity : AppCompatActivity() {
         supportFragmentManager.beginTransaction()
             .replace(R.id.container, camera2Fragment)
             .commit()
-
         listener.flowableSocketMessage
 //            .debounce(100, TimeUnit.MILLISECONDS)
             .doAfterNext {
-//                Log.d("LOG_TAG---", "MainActivity#flowableSocketMessage-58: Thread-> ${Thread.currentThread().name}")
+                Log.d("LOG_TAG---", "MainActivity#flowableSocketMessage-58: Thread-> ${Thread.currentThread().name}")
             }
 //            .subscribeOn(Schedulers.computation())
 //            .observeOn(AndroidSchedulers.mainThread())
@@ -80,11 +79,21 @@ class MainActivity : AppCompatActivity() {
 //            .observeOn(AndroidSchedulers.mainThread())
             .onErrorReturn {
 //                Log.d("LOG_TAG---", "MainActivity#flowableImageByte-81: Thread-> ${Thread.currentThread().name}")
-                ByteArray(10_000)
+                null
             }
-            .subscribe {
-//                Log.d("LOG_TAG---", "MainActivity#flowableImageByte-86: sendSocketMessage ${Thread.currentThread().name}")
-                sendSocketMessage(it)
+            .subscribe { bitmap ->
+                Log.d("LOG_TAG---", "MainActivity#flowableImageByte-86: sendSocketMessage ${Thread.currentThread().name}")
+                Matrix().apply {
+                    postRotate(-90F)
+                }.let {
+                    Bitmap.createBitmap(bitmap, 0,0, bitmap.width, bitmap.height, it, true)
+                }.let {
+                    ByteArrayOutputStream().apply {
+                        it.compress(Bitmap.CompressFormat.JPEG, 50, this)
+                    }
+                }.also {
+                    sendSocketMessage(it.toByteArray())
+                }
             }
             .also {
                 compsiteDisposable.add(it)

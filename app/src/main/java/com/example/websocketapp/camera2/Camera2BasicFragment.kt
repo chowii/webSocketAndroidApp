@@ -37,18 +37,16 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import com.example.websocketapp.ImageData
-import com.example.websocketapp.MainActivity
 import com.example.websocketapp.R
 import com.google.android.material.snackbar.Snackbar
 import io.reactivex.BackpressureStrategy
 import io.reactivex.Flowable
-import io.reactivex.Scheduler
 import io.reactivex.schedulers.Schedulers
 import io.reactivex.subjects.PublishSubject
 import jp.co.cyberagent.android.gpuimage.GPUImage
 import java.io.File
+import java.nio.ByteBuffer
 import java.util.*
-import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import kotlin.collections.ArrayList
@@ -148,36 +146,54 @@ class Camera2BasicFragment : Fragment(), View.OnClickListener,
      */
     private lateinit var file: File
 
-    private val imageByteSubject = PublishSubject.create<ByteArray>()
+    private val imageByteSubject = PublishSubject.create<Bitmap>()
 
-    val flowableImageByte: Flowable<ByteArray> = imageByteSubject
-        .debounce(50, TimeUnit.MILLISECONDS)
+    val flowableImageByte: Flowable<Bitmap> = imageByteSubject
         .subscribeOn(Schedulers.newThread())
-        .toFlowable(BackpressureStrategy.LATEST)
+        .toFlowable(BackpressureStrategy.DROP)
         .doOnNext {
-//            Log.d("LOG_TAG---", "Camera2BasicFragment#flowableImageByte-155: ${Thread.currentThread().name}")
+            Log.d("LOG_TAG---", "Camera2BasicFragment#flowableImageByte-155: ${Thread.currentThread().name}")
         }
 
     private val messageHandlerThread: HandlerThread by lazy { HandlerThread("Message Handler").also { it.start() } }
     private val messageHandler: Handler? by lazy { messageHandlerThread.looper?.let { Handler(it) } }
+    private var bitmap: Bitmap? = null
+    private lateinit var smallest: Size
+    private var resultRGB = ByteArray(0)
+    private var width_ima = 0
+    private var height_ima = 0
+    fun getActiveArray(buffer: ByteBuffer): ByteArray {
+        val ret = ByteArray(buffer.remaining())
+        if (buffer.hasArray()) {
+            val array = buffer.array()
+            System.arraycopy(array, buffer.arrayOffset() + buffer.position(), ret, 0, ret.size)
+        } else {
+            buffer.slice()[ret]
+        }
+        return ret
+    }
 
     /**
      * This a callback object for the [ImageReader]. "onImageAvailable" will be called when a
      * still image is ready to be saved.
      */
     private val onImageAvailableListener = ImageReader.OnImageAvailableListener {
-//        if (isSocketOpen) {
-            val image = it.acquireNextImage()
-            //        backgroundHandler?.post(ImageSaver(image, file))
-            val buffer = image.planes[0].buffer
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
-            imageByteSubject.onNext(bytes)
-//            messageHandler?.post {
-//                (requireActivity() as MainActivity).sendSocketMessage(bytes)
-//            }
+        it?.acquireNextImage()?.let { image ->
+            if (bitmap == null) {
+                width_ima = smallest.width
+                height_ima = smallest.height
+                bitmap = Bitmap.createBitmap(width_ima, height_ima, Bitmap.Config.RGB_565)
+            }
+            val buffer: ByteBuffer = image.planes[0].buffer
+            resultRGB = getActiveArray(buffer)
+            BitmapFactory.Options().apply {
+                inMutable = true
+                bitmap = BitmapFactory.decodeByteArray(resultRGB, 0, resultRGB.size, this)
+            }
+
+            imageByteSubject.onNext(bitmap!!)
             image.close()
-//        }
+        }
     }
 
     /**
@@ -362,8 +378,18 @@ class Camera2BasicFragment : Fragment(), View.OnClickListener,
                 // For still image captures, we use the largest available size.
                 val largest = Collections.max(
                     Arrays.asList(*map.getOutputSizes(ImageFormat.JPEG)),
-                    CompareSizesByArea())
-                imageReader = ImageReader.newInstance(largest.width, largest.height,
+                    CompareSizesByArea()
+                )
+                smallest = Collections.min(
+                    Arrays.asList(*map.getOutputSizes(ImageFormat.JPEG)),
+                    CompareSizesByArea()
+                )
+                val (meanWidth, meanHeight) = (smallest.width + largest.width).div(2) to (smallest.height + largest.height).div(2)
+                Log.d("LOG_TAG---", "Camera2BasicFragment#setUpCameraOutputs-399: $smallest <==> $largest")
+                Log.d("LOG_TAG---", "Camera2BasicFragment#setUpCameraOutputs-400: $meanWidth x $meanHeight")
+
+                imageReader = ImageReader.newInstance(
+                    1080, 1980,
                     ImageFormat.JPEG, /*maxImages*/ 1
                 ).apply {
                     setOnImageAvailableListener(onImageAvailableListener, backgroundHandler)
